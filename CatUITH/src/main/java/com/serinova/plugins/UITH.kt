@@ -30,7 +30,7 @@ import java.io.InputStream
 import java.lang.IndexOutOfBoundsException
 import java.util.regex.Pattern
 
-private fun newUpload(file: File, data: Config, log: Logger, userhash: String? = null): String {
+private fun newUpload(file: File, data: Config, log: Logger, userhash: String? = null, timeout: Long = 200_000): String {
     val lock = Object()
     val result = StringBuilder()
 
@@ -70,7 +70,7 @@ private fun newUpload(file: File, data: Config, log: Logger, userhash: String? =
                 }
             }
         }
-        lock.wait(9_000)
+        lock.wait(timeout)
     }
     try {
         log.debug("JSON FORMATTED:\n${JSONObject(result.toString()).toString(4)}")
@@ -113,6 +113,20 @@ class CatUITH : Plugin() {
         LOG.error(e)
     }
     private val pattern = Pattern.compile(re.toString())
+
+    // Get file size in MB
+    private fun getFileSizeMB(inputStream: InputStream?): Double {
+        return try {
+            if (inputStream != null) {
+                val bytes = inputStream.available()
+                bytes / (1024.0 * 1024.0) // Convert bytes to MB
+            } else {
+                0.0
+            }
+        } catch (e: Exception) {
+            0.0
+        }
+    }
 
     override fun start(ctx: Context) {
         val args = listOf(
@@ -176,12 +190,14 @@ class CatUITH : Plugin() {
                 val userhashDisplay = if (catboxUserhash.isNullOrEmpty()) "Not set (anonymous uploads)" else "Set"
                 val settingsUploadAllAttachments = settings.getBool("uploadAllAttachments", false)
                 val settingsPluginOff = settings.getBool("pluginOff", false)
+                val settingsTimeout = settings.getString("timeout", "200")
                 val sb = StringBuilder()
                 sb.append("json config:```\n$configData\n```\n\n")
                 sb.append("regex:```\n$configRegex\n```\n\n")
                 sb.append("catbox userhash: `$userhashDisplay`\n")
                 sb.append("uploadAllAttachments: `$settingsUploadAllAttachments`\n")
-                sb.append("pluginOff: `$settingsPluginOff`")
+                sb.append("pluginOff: `$settingsPluginOff`\n")
+                sb.append("timeout: `$settingsTimeout` seconds")
                 return@registerCommand CommandResult(sb.toString(), null, false)
             }
 
@@ -227,6 +243,35 @@ class CatUITH : Plugin() {
             
             // Get catbox userhash if available
             val catboxUserhash = settings.getString("catboxUserhash", "")
+            
+            // Get timeout setting and convert to milliseconds
+            val timeoutSeconds = settings.getString("timeout", "200").toLong()
+            val timeoutMillis = timeoutSeconds * 1000
+            
+            // Check file sizes and display appropriate toast
+            var largestFileSizeMB = 0.0
+            for (attachment in attachments) {
+                try {
+                    val inputStream = context.contentResolver.openInputStream(attachment.uri)
+                    val fileSizeMB = getFileSizeMB(inputStream)
+                    inputStream?.close()
+                    
+                    if (fileSizeMB > largestFileSizeMB) {
+                        largestFileSizeMB = fileSizeMB
+                    }
+                } catch (e: Exception) {
+                    LOG.debug("Failed to get file size: ${e.message}")
+                }
+            }
+            
+            // Show toast based on file size
+            if (largestFileSizeMB > 25) {
+                Utils.showToast("Uploading large file (${String.format("%.1f", largestFileSizeMB)} MB) to catbox.moe. This may take several minutes, please wait...", false)
+            } else if (largestFileSizeMB > 10) {
+                Utils.showToast("Uploading file (${String.format("%.1f", largestFileSizeMB)} MB) to catbox.moe. This might take a while, please wait...", false)
+            } else {
+                Utils.showToast("Uploading to catbox.moe...", false)
+            }
     
             // Process all attachments
             val uploadedUrls = mutableListOf<String>()
@@ -262,9 +307,9 @@ class CatUITH : Plugin() {
                         
                         // Now upload the temp file with userhash if available and applicable
                         val json = if (catboxUserhash.isNullOrEmpty() || configData.Name != "catbox.moe") {
-                            newUpload(tempFile, configData, LOG)
+                            newUpload(tempFile, configData, LOG, timeout = timeoutMillis)
                         } else {
-                            newUpload(tempFile, configData, LOG, catboxUserhash)
+                            newUpload(tempFile, configData, LOG, catboxUserhash, timeout = timeoutMillis)
                         }
                 
                         // match URL from regex
@@ -292,6 +337,9 @@ class CatUITH : Plugin() {
                 content.set("$plainText\n${uploadedUrls.joinToString("\n")}")
                 it.args[2] = content
                 it.args[3] = emptyList<Attachment<*>>()
+                
+                // Show success toast after upload completes
+                Utils.showToast("Upload completed successfully!", false)
             }
     
             return@before

@@ -157,6 +157,29 @@ class PluginSettings(private val settings: SettingsAPI) : SettingsPage() {
         }
         mainLayout.addView(switchOffPlugin)
 
+        // Timeout Input
+        mainLayout.addView(createSectionHeader("Timeout Settings"))
+        mainLayout.addView(createDescriptionText("Enter the timeout duration in seconds"))
+
+        val timeoutInput = TextInput(ctx, "Timeout").apply {
+            editText.setText(settings.getString("timeout", "200"))
+            editText.setTextColor(colors.text)
+            editText.setHintTextColor(colors.subtext)
+        }
+        mainLayout.addView(timeoutInput)
+
+        // Save Timeout Button
+        val timeoutButton = Button(ctx).apply {
+            text = "Save"
+            setTextColor(colors.base)
+            setBackgroundColor(colors.blue)
+            setOnClickListener {
+                settings.setString("timeout", timeoutInput.editText.text.toString())
+                Utils.showToast("Saved")
+            }
+        }
+        mainLayout.addView(timeoutButton)
+
         // Reset JSON Button
         val resetButton = Button(ctx).apply {
             text = "Reset JSON to Default"
