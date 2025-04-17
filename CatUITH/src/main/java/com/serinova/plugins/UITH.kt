@@ -81,6 +81,93 @@ private fun newUpload(file: File, data: Config, log: Logger, userhash: String? =
     return result.toString()
 }
 
+// Function to create an album
+private fun createAlbum(title: String, desc: String, files: List<String>, userhash: String?, log: Logger, timeout: Long = 200_000): String {
+    val lock = Object()
+    val result = StringBuilder()
+
+    synchronized(lock) {
+        Utils.threadPool.execute {
+            try {
+                val params = mutableMapOf<String, Any>()
+                val resp = Http.Request("https://catbox.moe/user/api.php", "POST")
+                
+                // Set required parameters
+                params["reqtype"] = "createalbum"
+                params["title"] = title
+                params["desc"] = desc
+                params["files"] = files.joinToString(" ")
+                
+                // Add userhash if provided
+                if (!userhash.isNullOrEmpty()) {
+                    params["userhash"] = userhash
+                }
+                
+                result.append(resp.executeWithMultipartForm(params).text())
+            } catch (ex: Throwable) {
+                if (ex is IOException) {
+                    log.debug("${ex.message} | ${ex.cause} | $ex | ${ex.printStackTrace()}")
+                }
+                log.error(ex)
+            } finally {
+                synchronized(lock) {
+                    lock.notifyAll()
+                }
+            }
+        }
+        lock.wait(timeout)
+    }
+    try {
+        log.debug("JSON FORMATTED:\n${JSONObject(result.toString()).toString(4)}")
+        log.debug("API RAW RESPONSE:\n${result.toString()}")
+    } catch (e: JSONException) {
+        log.debug("API RESPONSE:\n${result.toString()}")
+    }
+    return result.toString()
+}
+
+// Function to add files to an existing album
+private fun addToAlbum(short: String, files: List<String>, userhash: String?, log: Logger, timeout: Long = 200_000): String {
+    val lock = Object()
+    val result = StringBuilder()
+
+    synchronized(lock) {
+        Utils.threadPool.execute {
+            try {
+                val params = mutableMapOf<String, Any>()
+                val resp = Http.Request("https://catbox.moe/user/api.php", "POST")
+                
+                // Set required parameters
+                params["reqtype"] = "addtoalbum"
+                params["short"] = short
+                params["files"] = files.joinToString(" ")
+                
+                // Add userhash - required for album editing
+                if (!userhash.isNullOrEmpty()) {
+                    params["userhash"] = userhash
+                } else {
+                    log.debug("Warning: Attempting to modify an album without a userhash")
+                }
+                
+                result.append(resp.executeWithMultipartForm(params).text())
+            } catch (ex: Throwable) {
+                if (ex is IOException) {
+                    log.debug("${ex.message} | ${ex.cause} | $ex | ${ex.printStackTrace()}")
+                }
+                log.error(ex)
+            } finally {
+                synchronized(lock) {
+                    lock.notifyAll()
+                }
+            }
+        }
+        lock.wait(timeout)
+    }
+    
+    log.debug("API RESPONSE (Add to album):\n${result.toString()}")
+    return result.toString()
+}
+
 @AliucordPlugin
 class CatUITH : Plugin() {
 
@@ -102,6 +189,13 @@ class CatUITH : Plugin() {
         URL = null
     )
 
+    // Album Mode State
+    private var albumMode = false
+    private var pendingAlbumTitle = ""
+    private var pendingAlbumDesc = ""
+    private var pendingAlbumShort = ""
+    private var collectedFiles = mutableListOf<String>()
+
     // source: https://github.com/TymanWasTaken/aliucord-plugins/blob/main/EncryptDMs/src/main/kotlin/tech/tyman/plugins/encryptdms/EncryptDMs.kt#L321-L326
     private val textContentField = MessageContent::class.java.getDeclaredField("textContent").apply { isAccessible = true }
     private fun MessageContent.set(text: String) = textContentField.set(this, text)
@@ -113,6 +207,9 @@ class CatUITH : Plugin() {
         LOG.error(e)
     }
     private val pattern = Pattern.compile(re.toString())
+
+    // Regex for album URL
+    private val albumPattern = Pattern.compile("https:\\/\\/catbox\\.moe\\/c\\/[\\w]{6}")
 
     // Get file size in MB
     private fun getFileSizeMB(inputStream: InputStream?): Double {
@@ -126,6 +223,11 @@ class CatUITH : Plugin() {
         } catch (e: Exception) {
             0.0
         }
+    }
+
+    // Extract filename from URL
+    private fun extractFilename(url: String): String {
+        return url.substringAfterLast("/", "")
     }
 
     override fun start(ctx: Context) {
@@ -159,6 +261,30 @@ class CatUITH : Plugin() {
                         required = true
                     )
                 )
+            ),
+            Utils.createCommandOption(
+                ApplicationCommandType.SUBCOMMAND,
+                "album",
+                "Create a catbox album",
+                subCommandOptions = listOf(
+                    Utils.createCommandOption(
+                        ApplicationCommandType.STRING,
+                        "title",
+                        "Album title",
+                        required = true
+                    ),
+                    Utils.createCommandOption(
+                        ApplicationCommandType.STRING,
+                        "description",
+                        "Album description",
+                        required = false
+                    )
+                )
+            ),
+            Utils.createCommandOption(
+                ApplicationCommandType.SUBCOMMAND,
+                "cancelalb",
+                "Cancel album creation mode"
             )
         )
 
@@ -212,7 +338,114 @@ class CatUITH : Plugin() {
                 )
             }
 
+            if (it.containsArg("album")) {
+                // Get the userhash for album creation
+                val catboxUserhash = settings.getString("catboxUserhash", "")
+                
+                // Check if userhash is set for non-anonymous albums
+                if (catboxUserhash.isNullOrEmpty()) {
+                    return@registerCommand CommandResult(
+                        "⚠️ Warning: No userhash set. Creating anonymous album. You won't be able to edit it later.\n" +
+                        "Set your userhash in settings if you want to manage this album in the future.",
+                        null,
+                        false
+                    )
+                }
+                
+                // Get album details from command
+                val albumTitle = it.getSubCommandArgs("album")?.get("title").toString()
+                val albumDesc = it.getSubCommandArgs("album")?.get("description")?.toString() ?: ""
+                
+                // Set album mode
+                albumMode = true
+                pendingAlbumTitle = albumTitle
+                pendingAlbumDesc = albumDesc
+                collectedFiles.clear()
+                
+                return@registerCommand CommandResult(
+                    "✅ Album Mode activated!\n\n" +
+                    "Title: **$albumTitle**\n" +
+                    "Description: ${if (albumDesc.isEmpty()) "*None*" else albumDesc}\n\n" +
+                    "Now send your files to add them to the album. " +
+                    "When you're done, type `/cuith finishalb` to get the album link.\n\n" +
+                    "(To cancel album creation, use `/cuith cancelalb`)",
+                    null,
+                    false
+                )
+            }
+
+            if (it.containsArg("cancelalb")) {
+                if (!albumMode) {
+                    return@registerCommand CommandResult("❌ No active album creation to cancel.", null, false)
+                }
+                
+                // Reset album mode
+                albumMode = false
+                pendingAlbumTitle = ""
+                pendingAlbumDesc = ""
+                pendingAlbumShort = ""
+                collectedFiles.clear()
+                
+                return@registerCommand CommandResult("✅ Album creation cancelled.", null, false)
+            }
+
             CommandResult("", null, false)
+        }
+
+        // Register the finishalb command separately as it needs special handling
+        commands.registerCommand(
+            "finishalb",
+            "Finish album creation and get link",
+            emptyList()
+        ) {
+            if (!albumMode || collectedFiles.isEmpty()) {
+                return@registerCommand CommandResult(
+                    "❌ No active album with files to finalize. Start album creation with `/cuith album`.", 
+                    null, 
+                    false
+                )
+            }
+            
+            // Get the userhash for album creation
+            val catboxUserhash = settings.getString("catboxUserhash", "")
+            val timeoutSeconds = settings.getString("timeout", "200").toLong()
+            val timeoutMillis = timeoutSeconds * 1000
+            
+            Utils.showToast("Creating album... Please wait", false)
+            
+            // Create the album with collected files
+            val response = createAlbum(
+                pendingAlbumTitle,
+                pendingAlbumDesc,
+                collectedFiles,
+                catboxUserhash,
+                LOG,
+                timeoutMillis
+            )
+            
+            // Try to extract album URL
+            val albumMatcher = albumPattern.matcher(response)
+            val result = if (albumMatcher.find()) {
+                val albumUrl = albumMatcher.group()
+                
+                // Extract album short code for potential future use
+                pendingAlbumShort = albumUrl.substringAfterLast("/", "")
+                
+                "✅ Album created successfully!\n\n" +
+                "Title: **${pendingAlbumTitle}**\n" +
+                "Files: ${collectedFiles.size}\n" +
+                "Album URL: $albumUrl"
+            } else {
+                "❌ Failed to create album. Server response: $response"
+            }
+            
+            // Reset album mode
+            albumMode = false
+            pendingAlbumTitle = ""
+            pendingAlbumDesc = ""
+            collectedFiles.clear()
+            
+            return@registerCommand CommandResult(result, null, false)
         }
 
         patcher.before<ChatInputViewModel>(
@@ -264,8 +497,10 @@ class CatUITH : Plugin() {
                 }
             }
             
-            // Show toast based on file size
-            if (largestFileSizeMB > 25) {
+            // Show toast based on file size and mode
+            if (albumMode) {
+                Utils.showToast("Uploading files to catbox.moe for album...", false)
+            } else if (largestFileSizeMB > 25) {
                 Utils.showToast("Uploading large file (${String.format("%.1f", largestFileSizeMB)} MB) to catbox.moe. This may take several minutes, please wait...", false)
             } else if (largestFileSizeMB > 10) {
                 Utils.showToast("Uploading file (${String.format("%.1f", largestFileSizeMB)} MB) to catbox.moe. This might take a while, please wait...", false)
@@ -315,7 +550,16 @@ class CatUITH : Plugin() {
                         // match URL from regex
                         val matcher = pattern.matcher(json)
                         if (matcher.find()) {
-                            uploadedUrls.add(matcher.group())
+                            val fileUrl = matcher.group()
+                            uploadedUrls.add(fileUrl)
+                            
+                            // If in album mode, add the filename to collected files
+                            if (albumMode) {
+                                val filename = extractFilename(fileUrl)
+                                if (filename.isNotEmpty()) {
+                                    collectedFiles.add(filename)
+                                }
+                            }
                         }
                         
                         // Try to delete the temp file
@@ -333,13 +577,19 @@ class CatUITH : Plugin() {
             }
 
             if (uploadedUrls.isNotEmpty()) {
-                // Join all URLs with newlines and add to the message
-                content.set("$plainText\n${uploadedUrls.joinToString("\n")}")
-                it.args[2] = content
-                it.args[3] = emptyList<Attachment<*>>()
-                
-                // Show success toast after upload completes
-                Utils.showToast("Upload completed successfully!", false)
+                // If in album mode, show only toast notification and cancel message send
+                if (albumMode) {
+                    Utils.showToast("${uploadedUrls.size} file(s) uploaded and ready for album **$pendingAlbumTitle**. Use /finishalb when done to create the album.", false)
+                    // Cancel the message send operation entirely to prevent message from being sent to channel
+                    it.result = null
+                } else {
+                    // Normal mode - Join all URLs with newlines and add to the message
+                    content.set("$plainText\n${uploadedUrls.joinToString("\n")}")
+                    Utils.showToast("Upload completed successfully!", false)
+                    
+                    it.args[2] = content
+                    it.args[3] = emptyList<Attachment<*>>()
+                }
             }
     
             return@before

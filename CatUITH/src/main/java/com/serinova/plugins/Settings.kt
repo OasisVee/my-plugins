@@ -123,6 +123,9 @@ class PluginSettings(private val settings: SettingsAPI) : SettingsPage() {
         }
         mainLayout.addView(userhashButton)
 
+        // Album Settings 
+        mainLayout.addView(createDescriptionText("Your userhash is required for creating editable albums. Without it, albums will be anonymous and cannot be modified later."))
+
         // Divider
         mainLayout.addView(Divider(ctx).apply { 
             setBackgroundColor(colors.surface0)
@@ -180,6 +183,43 @@ class PluginSettings(private val settings: SettingsAPI) : SettingsPage() {
         }
         mainLayout.addView(timeoutButton)
 
+        // Album Settings Section
+        mainLayout.addView(createSectionHeader("Album Settings"))
+        mainLayout.addView(createDescriptionText("Configure album creation defaults"))
+
+        // Default Album Description
+        val albumDescInput = TextInput(ctx, "Default Album Description").apply {
+            editText.setText(settings.getString("defaultAlbumDesc", "Created with CatUITH"))
+            editText.setTextColor(colors.text)
+            editText.setHintTextColor(colors.subtext)
+        }
+        mainLayout.addView(albumDescInput)
+
+        // Save Album Description Button
+        val albumDescButton = Button(ctx).apply {
+            text = "Save"
+            setTextColor(colors.base)
+            setBackgroundColor(colors.blue)
+            setOnClickListener {
+                settings.setString("defaultAlbumDesc", albumDescInput.editText.text.toString())
+                Utils.showToast("Saved default album description")
+            }
+        }
+        mainLayout.addView(albumDescButton)
+
+        // Auto-Finish Album Option
+        val autoFinishAlbum = Utils.createCheckedSetting(
+            ctx, CheckedSetting.ViewType.CHECK,
+            "Auto-finish albums", 
+            "Automatically create album after files are uploaded (instead of waiting for /finishalb command)"
+        ).apply {
+            isChecked = settings.getBool("autoFinishAlbum", false)
+            setOnCheckedListener {
+                settings.setBool("autoFinishAlbum", it)
+            }
+        }
+        mainLayout.addView(autoFinishAlbum)
+
         // Reset JSON Button
         val resetButton = Button(ctx).apply {
             text = "Reset JSON to Default"
@@ -198,13 +238,29 @@ class PluginSettings(private val settings: SettingsAPI) : SettingsPage() {
             setPadding(p, p, p, p) 
         })
 
+        // Album Help Section
+        mainLayout.addView(createSectionHeader("Album Feature Help"))
+        
+        val albumHelpText = TextView(ctx).apply {
+            text = "Album Commands:\n" +
+                   "• /cuith album <title> [description] - Start creating an album\n" +
+                   "• /finishalb - Complete album creation and get link\n" +
+                   "• /cuith cancelalb - Cancel album creation\n\n" +
+                   "Note: A catbox.moe userhash is required for editable albums.\n" +
+                   "Anonymous albums cannot be modified after creation."
+            setTextColor(colors.text)
+            setPadding(p, p, p, p)
+        }
+        mainLayout.addView(albumHelpText)
+
         // Links Section
         mainLayout.addView(createSectionHeader("Links"))
 
         // Help/Info
         val helpInfo = TextView(ctx).apply {
             linksClickable = true
-            text = "- UITH README: https://git.io/JSyri"
+            text = "- UITH README: https://git.io/JSyri\n" +
+                   "- Catbox.moe: https://catbox.moe"
             setTextColor(colors.peach)
         }
         Linkify.addLinks(helpInfo, Linkify.WEB_URLS)
