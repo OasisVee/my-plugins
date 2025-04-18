@@ -244,7 +244,7 @@ class PluginSettings(private val settings: SettingsAPI) : SettingsPage() {
         val albumHelpText = TextView(ctx).apply {
             text = "Album Commands:\n" +
                    "• /cuith album <title> [description] - Start creating an album\n" +
-                   "• /finishalb - Complete album creation and get link\n" +
+                   "• /cuith finishalb - Complete album creation and get link\n" +
                    "• /cuith cancelalb - Cancel album creation\n\n" +
                    "Note: A catbox.moe userhash is required for editable albums.\n" +
                    "Anonymous albums cannot be modified after creation."

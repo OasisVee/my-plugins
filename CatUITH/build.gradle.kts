@@ -1,8 +1,13 @@
-version = "1.2.2"
+version = "1.2.3"
 description = "Upload images to catbox.moe directly from Discord. (bigger files can take upwards of minutes depending on your internet speed)"
 aliucord.author("scruz", 794527403580981248L)
 aliucord.changelog.set(
     """
+    # 1.2.3
+    * added finishalb to cuith as a subcommand
+    [BUGS]
+    * doesnt clear the message content when in album mode (even though it realistically should)
+
     # 1.2.0/1.2.2
     * added album functionality
     * added commands "/cuith album", "/cuith cancelalb", "/finishalb" (to be changed)
