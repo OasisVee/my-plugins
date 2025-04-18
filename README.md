@@ -15,3 +15,4 @@ Fork of UITH, originally developed by scrazzz, with a primary focus on Catbox fu
 - added a reset button to reset any user added json for the fetching to default
 - added a custom theme to the settings page (trying to implement a toggle for it in case the user wants to use the default theme)
 - added a setting to change the timeout for uploading
+- album functionality for Catbox (/cuith album to start album mode, /cuith finishalb to finish album mode and get the album link, /cuith cancelalb to cancel album mode without making an album)
