@@ -142,7 +142,7 @@ class AnimeImageFetch : Plugin() {
                 } else {
                     if (send) {
                         val nsfw_warning = if (isNsfw) "**⚠️ NSFW CONTENT ⚠️**\n" else ""
-                        CommandResult("${nsfw_warning}${urls.joinToString("\n")}", null, true)
+                        CommandResult("${urls.joinToString("\n")}", null, true)
                     } else {
                         val embeds = buildEmbeds(urls as MutableList<String>, if (isNsfw) "⚠️ NSFW CONTENT" else null)
                         CommandResult(null, embeds, false, "AnimeImageFetch")
