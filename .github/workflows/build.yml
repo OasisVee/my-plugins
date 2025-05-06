@@ -1,6 +1,5 @@
 name: Build
 
-# https://docs.github.com/en/actions/learn-github-actions/workflow-syntax-for-github-actions#concurrency
 concurrency: 
   group: "build"
   cancel-in-progress: true
@@ -9,6 +8,7 @@ on:
   push:
     branches:
       - main
+      - test-main
     paths-ignore:
       - '*.md'
 
@@ -16,19 +16,28 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@master
+      - name: Checkout Source
+        uses: actions/checkout@v3
         with:
           path: "src"
 
-      - name: Checkout builds
-        uses: actions/checkout@master
+      - name: Set build branch variable
+        id: vars
+        run: |
+          if [[ "${GITHUB_REF}" == "refs/heads/main" ]]; then
+            echo "branch=builds" >> $GITHUB_OUTPUT
+          else
+            echo "branch=test-builds" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Checkout Build Artifacts Branch
+        uses: actions/checkout@v3
         with:
-          ref: "builds"
+          ref: ${{ steps.vars.outputs.branch }}
           path: "builds"
 
       - name: Checkout Aliucord
-        uses: actions/checkout@master
+        uses: actions/checkout@v3
         with:
           repository: "Aliucord/Aliucord"
           path: "repo"
@@ -56,5 +65,5 @@ jobs:
           git config --local user.email "actions@github.com"
           git config --local user.name "GitHub Actions"
           git add .
-          git commit -m "Build $GITHUB_SHA" || exit 0   # do not error if nothing to commit
+          git commit -m "Build $GITHUB_SHA" || exit 0
           git push
