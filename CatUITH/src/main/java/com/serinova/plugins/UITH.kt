@@ -14,6 +14,10 @@ import com.aliucord.patcher.before
 import com.aliucord.utils.GsonUtils
 import com.aliucord.api.CommandsAPI.CommandResult
 import com.discord.api.commands.ApplicationCommandType
+import com.discord.api.premium.PremiumTier
+import com.discord.models.user.User
+import com.discord.stores.StoreStream
+import com.discord.utilities.premium.PremiumUtils
 import com.discord.widgets.chat.MessageContent
 import com.discord.widgets.chat.MessageManager
 import com.discord.widgets.chat.input.ChatInputViewModel
@@ -186,20 +190,68 @@ class CatUITH : Plugin() {
     }
     private val pattern = Pattern.compile(re.toString())
     private val albumPattern = Pattern.compile("https:\\/\\/catbox\\.moe\\/c\\/[\\w]{6}")
-    private fun getFileSizeMB(inputStream: InputStream?): Double {
-        return try {
+    
+    // Constants for Discord file size limits
+    private val DEFAULT_MAX_FILE_SIZE_MB = 25
+    private val NITRO_CLASSIC_MAX_FILE_SIZE_MB = 50
+    private val NITRO_MAX_FILE_SIZE_MB = 500
+    
+    // --- UPDATED getFileSizeMB function (reads stream) ---
+    private fun getFileSizeMB(context: Context, uri: Uri): Double {
+        var inputStream: InputStream? = null
+        try {
+            inputStream = context.contentResolver.openInputStream(uri)
             if (inputStream != null) {
-                val bytes = inputStream.available()
-                bytes / (1024.0 * 1024.0)
-            } else {
-                0.0
+                var size: Long = 0
+                val buffer = ByteArray(1024) // Read in 1KB chunks
+                var bytesRead: Int
+                while (inputStream.read(buffer).also { bytesRead = it } != -1) {
+                    size += bytesRead
+                }
+                return size / (1024.0 * 1024.0)
             }
         } catch (e: Exception) {
-            0.0
+            LOG.error("Failed to get file size for Uri: $uri", e)
+        } finally {
+            try {
+                inputStream?.close()
+            } catch (e: IOException) {
+                LOG.error("Failed to close input stream", e)
+            }
         }
+        return 0.0 // Return 0.0 if size calculation fails
     }
+    // --- END UPDATED getFileSizeMB function ---
+    
     private fun extractFilename(url: String): String {
         return url.substringAfterLast("/", "")
+    }
+    
+    // Get user's max file size based on Nitro status
+    private fun getUserMaxFileSizeMB(): Int {
+        val currentUser = StoreStream.getUsers().me
+        if (currentUser == null) {
+            return DEFAULT_MAX_FILE_SIZE_MB
+        }
+        
+        return when (currentUser.getPremiumTier()) {
+            PremiumTier.TIER_1 -> NITRO_CLASSIC_MAX_FILE_SIZE_MB // Nitro Classic
+            PremiumTier.TIER_2 -> NITRO_MAX_FILE_SIZE_MB // Nitro
+            else -> DEFAULT_MAX_FILE_SIZE_MB // No Nitro
+        }
+    }
+    
+    // Check if file should be uploaded to Catbox based on size and user settings
+    private fun shouldUploadToCatbox(fileSizeMB: Double): Boolean {
+        // Always upload in album mode
+        if (albumMode) return true
+        
+        // If large files only setting is disabled, always upload to Catbox
+        if (!settings.getBool("uploadLargeFilesOnly", false)) return true
+        
+        // Check if file size exceeds Discord's limit based on user's Nitro status
+        val userMaxFileSizeMB = getUserMaxFileSizeMB()
+        return fileSizeMB > userMaxFileSizeMB
     }
 
     override fun start(ctx: Context) {
@@ -292,15 +344,19 @@ class CatUITH : Plugin() {
                 val catboxUserhash = settings.getString("catboxUserhash", "")
                 val userhashDisplay = if (catboxUserhash.isNullOrEmpty()) "Not set (anonymous uploads)" else "Set"
                 val settingsUploadAllAttachments = settings.getBool("uploadAllAttachments", false)
+                val settingsUploadLargeFilesOnly = settings.getBool("uploadLargeFilesOnly", false)
                 val settingsPluginOff = settings.getBool("pluginOff", false)
                 val settingsTimeout = settings.getString("timeout", "200")
+                val userMaxFileSize = getUserMaxFileSizeMB()
                 val sb = StringBuilder()
                 sb.append("json config:```\n$configData\n```\n\n")
                 sb.append("regex:```\n$configRegex\n```\n\n")
                 sb.append("catbox userhash: `$userhashDisplay`\n")
                 sb.append("uploadAllAttachments: `$settingsUploadAllAttachments`\n")
+                sb.append("uploadLargeFilesOnly: `$settingsUploadLargeFilesOnly`\n")
                 sb.append("pluginOff: `$settingsPluginOff`\n")
-                sb.append("timeout: `$settingsTimeout` seconds")
+                sb.append("timeout: `$settingsTimeout` seconds\n")
+                sb.append("Your max Discord upload limit: `$userMaxFileSize MB`")
                 return@registerCommand CommandResult(sb.toString(), null, false)
             }
 
@@ -326,7 +382,8 @@ class CatUITH : Plugin() {
                     )
                 }
                 val albumTitle = it.getSubCommandArgs("album")?.get("title").toString()
-                val albumDesc = it.getSubCommandArgs("album")?.get("description")?.toString() ?: ""
+                val albumDesc = it.getSubCommandArgs("album")?.get("description")?.toString() 
+                    ?: settings.getString("defaultAlbumDesc", "Created with CatUITH")
                 albumMode = true
                 pendingAlbumTitle = albumTitle
                 pendingAlbumDesc = albumDesc
@@ -414,8 +471,11 @@ class CatUITH : Plugin() {
             val content = it.args[2] as MessageContent
             val plainText = content.textContent
             val attachments = (it.args[3] as List<Attachment<*>>).toMutableList()
+            
+            // Early return conditions
             if (settings.getBool("pluginOff", false)) { return@before }
             if (attachments.isEmpty()) { return@before }
+            
             val sxcuConfig = settings.getString("jsonConfig", 
                 GsonUtils.toJson(DEFAULT_CATBOX_CONFIG)
             )
@@ -423,99 +483,178 @@ class CatUITH : Plugin() {
             val catboxUserhash = settings.getString("catboxUserhash", "")
             val timeoutSeconds = settings.getString("timeout", "200").toLong()
             val timeoutMillis = timeoutSeconds * 1000
-            var largestFileSizeMB = 0.0
+            val uploadLargeFilesOnly = settings.getBool("uploadLargeFilesOnly", false)
+            val userMaxFileSize = getUserMaxFileSizeMB()
+            
+            // For tracking files to upload to catbox and files to keep for Discord
+            val filesToUploadToCatbox = mutableListOf<Attachment<*>>()
+            val filesToKeepForDiscord = mutableListOf<Attachment<*>>()
+            var largestFileSizeMB = 0.0 // Keep track of the largest file size overall
+            
+            // Analyze all attachments to decide which ones need to be uploaded to Catbox
             for (attachment in attachments) {
                 try {
-                    val inputStream = context.contentResolver.openInputStream(attachment.uri)
-                    val fileSizeMB = getFileSizeMB(inputStream)
-                    inputStream?.close()
+                    // Using the updated getFileSizeMB that reads the stream reliably
+                    val fileSizeMB = getFileSizeMB(context, attachment.uri)
                     
                     if (fileSizeMB > largestFileSizeMB) {
                         largestFileSizeMB = fileSizeMB
                     }
+                    
+                    // Check MIME type restrictions unless uploadAllAttachments is true
+                    val mimeType = context.getContentResolver().getType(attachment.uri)
+                    val mime = if (mimeType != null) {
+                        MimeTypeMap.getSingleton().getExtensionFromMimeType(mimeType)
+                    } else {
+                        attachment.uri.toString().substringAfterLast('.', "")
+                    }
+                    
+                    val isAllowedMimeType = mime in arrayOf("png", "jpg", "jpeg", "webp", "gif", "mp4") || 
+                                           settings.getBool("uploadAllAttachments", false)
+                    
+                    // Decide if this file should be handled by the plugin (uploaded to Catbox)
+                    if (isAllowedMimeType && (shouldUploadToCatbox(fileSizeMB) || albumMode)) {
+                        filesToUploadToCatbox.add(attachment)
+                    } else {
+                        filesToKeepForDiscord.add(attachment) // Leave for Discord
+                    }
                 } catch (e: Exception) {
-                    LOG.debug("Failed to get file size: ${e.message}")
+                    LOG.error("Failed to process attachment ${attachment.uri} for size/type check: ${e.message}", e)
+                    // If processing an attachment fails, leave it for Discord as a fallback
+                    filesToKeepForDiscord.add(attachment) 
+                    continue // Move to the next attachment
                 }
             }
+            
+            // If no files are marked for Catbox upload, let Discord handle the ones in filesToKeepForDiscord
+            if (filesToUploadToCatbox.isEmpty()) {
+                if (uploadLargeFilesOnly && !albumMode) {
+                    Utils.showToast("All eligible files within Discord upload limits, uploading directly to Discord", false)
+                } else if (!albumMode) {
+                    // If uploadLargeFilesOnly is false, files were intended for Catbox but none were eligible/processed
+                     Utils.showToast("No eligible files for Catbox upload. Sending via Discord.", false)
+                }
+                 // Ensure only files intended for Discord are passed
+                it.args[3] = filesToKeepForDiscord
+                
+                // If filesToKeepForDiscord is also empty, cancel the message send entirely
+                if (filesToKeepForDiscord.isEmpty()) {
+                     content.set("")
+                     it.result = null // Cancel message send if no content or attachments remain
+                }
+                return@before // Exit the patcher hook early
+            }
+            
+            // Show appropriate toast while Catbox upload is happening
             if (albumMode) {
                 Utils.showToast("Uploading files to catbox.moe for album...", false)
-            } else if (largestFileSizeMB > 25) {
-                Utils.showToast("Uploading large file (${String.format("%.1f", largestFileSizeMB)} MB) to catbox.moe. This may take several minutes, please wait...", false)
-            } else if (largestFileSizeMB > 10) {
-                Utils.showToast("Uploading file (${String.format("%.1f", largestFileSizeMB)} MB) to catbox.moe. This might take a while, please wait...", false)
             } else {
-                Utils.showToast("Uploading to catbox.moe...", false)
+                 val totalCatboxSizeMB = filesToUploadToCatbox.sumOf { getFileSizeMB(context, it.uri) }
+                 Utils.showToast("Uploading ${filesToUploadToCatbox.size} file(s) (${String.format("%.1f", totalCatboxSizeMB)} MB total) to catbox.moe. Please wait...", false)
             }
+            
             val uploadedUrls = mutableListOf<String>()
     
-            for (attachment in attachments) {
+            // --- Perform Catbox Uploads for files in filesToUploadToCatbox ---
+            for (attachment in filesToUploadToCatbox) {
+                 // Re-get mime type here in case it was missed earlier or for clarity
                 val mimeType = context.getContentResolver().getType(attachment.uri)
                 val mime = if (mimeType != null) {
                     MimeTypeMap.getSingleton().getExtensionFromMimeType(mimeType)
                 } else {
                     attachment.uri.toString().substringAfterLast('.', "")
                 }
-                if (mime !in arrayOf("png", "jpg", "jpeg", "webp", "gif", "mp4")) {
-                    if (!settings.getBool("uploadAllAttachments", false)) {
-                        continue
-                    }
-                }
 
                 try {
+                    // Create a temporary file from the attachment URI to upload
                     val tempFile = File.createTempFile("uith_", ".${mime ?: "tmp"}")
-                    tempFile.deleteOnExit()
-                    val inputStream = context.contentResolver.openInputStream(attachment.uri)
-                    if (inputStream != null) {
-                        FileOutputStream(tempFile).use { output ->
-                            inputStream.copyTo(output)
-                            inputStream.close()
-                        }
-                        val json = if (catboxUserhash.isNullOrEmpty() || configData.Name != "catbox.moe") {
-                            newUpload(tempFile, configData, LOG, timeout = timeoutMillis)
-                        } else {
-                            newUpload(tempFile, configData, LOG, catboxUserhash, timeout = timeoutMillis)
-                        }
-                        val matcher = pattern.matcher(json)
-                        if (matcher.find()) {
-                            val fileUrl = matcher.group()
-                            uploadedUrls.add(fileUrl)
-                            if (albumMode) {
-                                val filename = extractFilename(fileUrl)
-                                if (filename.isNotEmpty()) {
-                                    collectedFiles.add(filename)
-                                }
-                            }
-                        }
-                        try {
-                            tempFile.delete()
-                        } catch (e: Exception) {
-                            LOG.debug("Failed to delete temp file: ${e.message}")
-                        }
+                    tempFile.deleteOnExit() // Ensure temp file is deleted later
+
+                    context.contentResolver.openInputStream(attachment.uri)?.use { inputStream ->
+                         FileOutputStream(tempFile).use { output ->
+                             inputStream.copyTo(output) // Copy stream to temp file
+                         } // inputstream and outputstream are closed automatically by use{}
+
+                         // Perform the upload using the temp file
+                         val json = if (catboxUserhash.isNullOrEmpty() || configData.Name != "catbox.moe") {
+                             newUpload(tempFile, configData, LOG, timeout = timeoutMillis)
+                         } else {
+                             newUpload(tempFile, configData, LOG, catboxUserhash, timeout = timeoutMillis)
+                         }
+
+                         // Parse the response to find the uploaded URL
+                         val matcher = pattern.matcher(json)
+                         if (matcher.find()) {
+                             val fileUrl = matcher.group()
+                             uploadedUrls.add(fileUrl)
+                             if (albumMode) {
+                                 val filename = extractFilename(fileUrl)
+                                 if (filename.isNotEmpty()) {
+                                     collectedFiles.add(filename)
+                                 }
+                             }
+                         } else {
+                             LOG.debug("Catbox upload failed or URL not found for ${attachment.uri}. Response: $json")
+                             Utils.showToast("UITH: Failed to upload a file to Catbox", true)
+                             // If upload failed, this file's URL won't be added, effectively dropping it
+                         }
+                    } ?: run {
+                         LOG.debug("Failed to open input stream for attachment ${attachment.uri} during upload prep.")
+                         Utils.showToast("UITH: Failed to prepare a file for upload", true)
+                    }
+
+                    try {
+                        tempFile.delete() // Clean up the temporary file
+                    } catch (e: Exception) {
+                        LOG.debug("Failed to delete temp file: ${e.message}")
                     }
                 } catch (ex: Throwable) {
-                    LOG.error(ex)
-                    Utils.showToast("UITH: Failed to upload one or more files", true)
-                    continue
+                    LOG.error("Catbox upload process threw an exception for ${attachment.uri}", ex)
+                    Utils.showToast("UITH: Failed to process a file for upload", true)
+                    // If an exception occurs during prep/upload, this file's URL won't be added
                 }
             }
+            // --- End Catbox Uploads ---
 
+
+            // --- Logic based on successful Catbox uploads (mimics original blocking) ---
             if (uploadedUrls.isNotEmpty()) {
                 if (albumMode) {
-                    content.set("")
-                    it.result = null
-                    it.args[3] = emptyList<Attachment<*>>()
+                    // In album mode, we don't send any message, just confirm files added to album list
+                    content.set("") // Clear message content
+                    it.result = null // Cancel the Discord message send entirely
+                    it.args[3] = emptyList<Attachment<*>>() // Ensure no attachments go to Discord
         
                     Utils.showToast("${uploadedUrls.size} file(s) uploaded and ready for album **$pendingAlbumTitle**. Use /cuith finishalb when done to create the album.", false)
-                    return@before
+                    // Explicitly return to block Discord's default send
+                    return@before 
                 } else {
+                    // Append uploaded URLs to message content
                     content.set("$plainText\n${uploadedUrls.joinToString("\n")}")
-                    Utils.showToast("Upload completed successfully!", false)
+                    Utils.showToast("Catbox upload completed successfully!", false)
         
-                    it.args[2] = content
-                    it.args[3] = emptyList<Attachment<*>>()
+                    // --- BLOCK DISCORD ATTACHMENT HANDLING (Original Method) ---
+                    LOG.debug("Attempting to block Discord attachment handling...") // <-- ADDED LOG
+                    // Modify the arguments passed to Discord's sendMessage
+                    it.args[2] = content // Pass the modified content
+                    it.args[3] = emptyList<Attachment<*>>() // Pass an EMPTY list of attachments
+                    // By passing an empty list, we prevent Discord from trying to upload anything itself.
+                    
+                    LOG.debug("it.args[3] set to empty list. Returning before.") // <-- ADDED LOG
+                    // Explicitly return to block Discord's default send process for attachments
+                    return@before 
+                    // --- END BLOCK ---
                 }
+            } else {
+                 // If filesToUploadToCatbox wasn't empty, but *none* of them successfully uploaded
+                 LOG.debug("Attempted Catbox uploads for ${filesToUploadToCatbox.size} files, but no URLs were successfully retrieved. Leaving attachments for Discord.")
+                 Utils.showToast("UITH: Failed to upload files to Catbox. Sending attachments via Discord.", false)
+                 
+                 // In this case, we leave the original list of attachments (minus any successfully uploaded)
+                 // for Discord to handle as a fallback.
+                 it.args[3] = filesToKeepForDiscord 
+                 // No explicit return here, so Discord's default sendMessage runs with filesToKeepForDiscord
             }
-            return@before
         }
     }
 

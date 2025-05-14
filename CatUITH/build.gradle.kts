@@ -1,8 +1,11 @@
-version = "1.2.3"
+version = "1.3.0"
 description = "Upload images to catbox.moe directly from Discord. (bigger files can take upwards of minutes depending on your internet speed)"
 aliucord.author("scruz", 794527403580981248L)
 aliucord.changelog.set(
     """
+    # 1.3.0
+    * added a setting to only upload to catbox if its higher than the discord upload size
+    
     # 1.2.3
     * added finishalb to cuith as a subcommand
     [BUGS]

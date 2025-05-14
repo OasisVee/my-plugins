@@ -148,6 +148,18 @@ class PluginSettings(private val settings: SettingsAPI) : SettingsPage() {
         }
         mainLayout.addView(uploadAllAttachments)
 
+        val uploadLargeFilesOnly = Utils.createCheckedSetting(
+            ctx, CheckedSetting.ViewType.CHECK,
+            "Upload large files only", 
+            "Only use Catbox for files that exceed Discord's size limits based on your Nitro status.\nSmaller files will be uploaded directly to Discord."
+        ).apply {
+            isChecked = settings.getBool("uploadLargeFilesOnly", false)
+            setOnCheckedListener {
+                settings.setBool("uploadLargeFilesOnly", it)
+            }
+        }
+        mainLayout.addView(uploadLargeFilesOnly)
+
         val switchOffPlugin = Utils.createCheckedSetting(
             ctx, CheckedSetting.ViewType.CHECK,
             "Disable UITH", 
