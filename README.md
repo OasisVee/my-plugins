@@ -26,6 +26,10 @@ Fork of UITH (originally by scrazzz) focused on Catbox integration. Still suppor
   - `/cuith album` - start album mode
   - `/cuith finishalb` - finish album and get link
   - `/cuith cancelalb` - cancel album mode
+- Upload history support:
+  - `/cuith history` - shows history (does from locally so uploaded files from before this addition will not be shown)
+  - `/cuith clearhistory` - clears history (can also be used by a button in settings)
+  - max history count in settings (Default: 50, setting to 0 disables history)
 
 ---
 

@@ -20,6 +20,7 @@ import com.discord.widgets.chat.input.ChatInputViewModel
 import com.lytefast.flexinput.model.Attachment
 
 import com.google.gson.JsonSyntaxException
+import com.google.gson.reflect.TypeToken
 import org.json.JSONException
 import org.json.JSONObject
 
@@ -28,6 +29,8 @@ import java.io.FileOutputStream
 import java.io.IOException
 import java.io.InputStream
 import java.lang.IndexOutOfBoundsException
+import java.text.SimpleDateFormat
+import java.util.*
 import java.util.regex.Pattern
 
 private fun newUpload(file: File, data: Config, log: Logger, userhash: String? = null, timeout: Long = 200_000): String {
@@ -78,6 +81,7 @@ private fun newUpload(file: File, data: Config, log: Logger, userhash: String? =
     }
     return result.toString()
 }
+
 private fun createAlbum(title: String, desc: String, files: List<String>, userhash: String?, log: Logger, timeout: Long = 200_000): String {
     val lock = Object()
     val result = StringBuilder()
@@ -117,6 +121,7 @@ private fun createAlbum(title: String, desc: String, files: List<String>, userha
     }
     return result.toString()
 }
+
 private fun addToAlbum(short: String, files: List<String>, userhash: String?, log: Logger, timeout: Long = 200_000): String {
     val lock = Object()
     val result = StringBuilder()
@@ -179,6 +184,7 @@ class CatUITH : Plugin() {
     private var collectedFiles = mutableListOf<String>()
     private val textContentField = MessageContent::class.java.getDeclaredField("textContent").apply { isAccessible = true }
     private fun MessageContent.set(text: String) = textContentField.set(this, text)
+    
     private var re = try {
         settings.getString("regex", "https:\\/\\/files\\.catbox\\.moe\\/[\\w.-]*").toRegex().toString()
     } catch (e: Throwable) {
@@ -186,6 +192,54 @@ class CatUITH : Plugin() {
     }
     private val pattern = Pattern.compile(re.toString())
     private val albumPattern = Pattern.compile("https:\\/\\/catbox\\.moe\\/c\\/[\\w]{6}")
+
+    // Upload history functionality
+    private fun getUploadHistory(): MutableList<UploadHistoryItem> {
+        val historyJson = settings.getString("uploadHistory", "[]")
+        return try {
+            val type = object : TypeToken<MutableList<UploadHistoryItem>>() {}.type
+            GsonUtils.fromJson(historyJson, type) ?: mutableListOf()
+        } catch (e: Exception) {
+            LOG.debug("Failed to parse upload history: ${e.message}")
+            mutableListOf()
+        }
+    }
+
+    private fun saveUploadHistory(history: List<UploadHistoryItem>) {
+        try {
+            val historyJson = GsonUtils.toJson(history)
+            settings.setString("uploadHistory", historyJson)
+        } catch (e: Exception) {
+            LOG.debug("Failed to save upload history: ${e.message}")
+        }
+    }
+
+    private fun addToUploadHistory(url: String, filename: String, fileSize: Long) {
+        val maxHistorySize = settings.getInt("maxHistorySize", 50)
+        if (maxHistorySize <= 0) return // History disabled
+        
+        val history = getUploadHistory()
+        val timestamp = System.currentTimeMillis()
+        val newItem = UploadHistoryItem(url, filename, fileSize, timestamp)
+        
+        // Remove duplicate URLs if they exist
+        history.removeAll { it.url == url }
+        
+        // Add new item at the beginning
+        history.add(0, newItem)
+        
+        // Trim to max size
+        while (history.size > maxHistorySize) {
+            history.removeAt(history.size - 1)
+        }
+        
+        saveUploadHistory(history)
+    }
+
+    private fun clearUploadHistory() {
+        settings.setString("uploadHistory", "[]")
+    }
+
     private fun getFileSizeMB(inputStream: InputStream?): Double {
         return try {
             if (inputStream != null) {
@@ -198,6 +252,7 @@ class CatUITH : Plugin() {
             0.0
         }
     }
+
     private fun extractFilename(url: String): String {
         return url.substringAfterLast("/", "")
     }
@@ -262,6 +317,16 @@ class CatUITH : Plugin() {
                 ApplicationCommandType.SUBCOMMAND,
                 "finishalb",
                 "Finish album creation and get link"
+            ),
+            Utils.createCommandOption(
+                ApplicationCommandType.SUBCOMMAND,
+                "history",
+                "View recent upload history"
+            ),
+            Utils.createCommandOption(
+                ApplicationCommandType.SUBCOMMAND,
+                "clearhistory",
+                "Clear upload history"
             )
         )
 
@@ -294,22 +359,24 @@ class CatUITH : Plugin() {
                 val settingsUploadAllAttachments = settings.getBool("uploadAllAttachments", false)
                 val settingsPluginOff = settings.getBool("pluginOff", false)
                 val settingsTimeout = settings.getString("timeout", "200")
+                val maxHistorySize = settings.getInt("maxHistorySize", 50)
                 val sb = StringBuilder()
                 sb.append("json config:```\n$configData\n```\n\n")
                 sb.append("regex:```\n$configRegex\n```\n\n")
                 sb.append("catbox userhash: `$userhashDisplay`\n")
                 sb.append("uploadAllAttachments: `$settingsUploadAllAttachments`\n")
                 sb.append("pluginOff: `$settingsPluginOff`\n")
-                sb.append("timeout: `$settingsTimeout` seconds")
+                sb.append("timeout: `$settingsTimeout` seconds\n")
+                sb.append("max history size: `$maxHistorySize`")
                 return@registerCommand CommandResult(sb.toString(), null, false)
             }
 
             if (it.containsArg("disable")) {
                 val set = it.getSubCommandArgs("disable")?.get("disable").toString()
-                if (set.lowercase() == "true") settings.setString("pluginOff", set)
-                if (set.lowercase() == "false") settings.setString("pluginOff", set)
+                if (set.lowercase() == "true") settings.setBool("pluginOff", true)
+                if (set.lowercase() == "false") settings.setBool("pluginOff", false)
                 return@registerCommand CommandResult(
-                    "Plugin Disabled: ${settings.getString("pluginOff", false.toString())}",
+                    "Plugin Disabled: ${settings.getBool("pluginOff", false)}",
                     null,
                     false
                 )
@@ -398,6 +465,43 @@ class CatUITH : Plugin() {
                 return@registerCommand CommandResult(result, null, false)
             }
 
+            if (it.containsArg("history")) {
+                val history = getUploadHistory()
+                if (history.isEmpty()) {
+                    return@registerCommand CommandResult("📁 Upload history is empty.", null, false)
+                }
+                
+                val sb = StringBuilder()
+                sb.append("📁 **Recent Uploads** (${history.size} files)\n\n")
+                
+                val dateFormat = SimpleDateFormat("MMM dd, yyyy HH:mm", Locale.getDefault())
+                history.take(20).forEachIndexed { index, item ->
+                    val date = dateFormat.format(Date(item.timestamp))
+                    val sizeStr = if (item.fileSize > 0) {
+                        String.format("%.1f MB", item.fileSize / (1024.0 * 1024.0))
+                    } else {
+                        "Unknown size"
+                    }
+                    
+                    sb.append("**${index + 1}.** `${item.filename}` ($sizeStr)\n")
+                    sb.append("   📅 $date\n")
+                    sb.append("   🔗 ${item.url}\n\n")
+                }
+                
+                if (history.size > 20) {
+                    sb.append("... and ${history.size - 20} more files\n\n")
+                }
+                
+                sb.append("💡 Simply copy any link above to re-share a file")
+                
+                return@registerCommand CommandResult(sb.toString(), null, false)
+            }
+
+            if (it.containsArg("clearhistory")) {
+                clearUploadHistory()
+                return@registerCommand CommandResult("🗑️ Upload history cleared.", null, false)
+            }
+
             CommandResult("", null, false)
         }
 
@@ -424,6 +528,7 @@ class CatUITH : Plugin() {
             val timeoutSeconds = settings.getString("timeout", "200").toLong()
             val timeoutMillis = timeoutSeconds * 1000
             var largestFileSizeMB = 0.0
+            
             for (attachment in attachments) {
                 try {
                     val inputStream = context.contentResolver.openInputStream(attachment.uri)
@@ -437,6 +542,7 @@ class CatUITH : Plugin() {
                     LOG.debug("Failed to get file size: ${e.message}")
                 }
             }
+            
             if (albumMode) {
                 Utils.showToast("Uploading files to catbox.moe for album...", false)
             } else if (largestFileSizeMB > 25) {
@@ -446,6 +552,7 @@ class CatUITH : Plugin() {
             } else {
                 Utils.showToast("Uploading to catbox.moe...", false)
             }
+            
             val uploadedUrls = mutableListOf<String>()
     
             for (attachment in attachments) {
@@ -465,27 +572,37 @@ class CatUITH : Plugin() {
                     val tempFile = File.createTempFile("uith_", ".${mime ?: "tmp"}")
                     tempFile.deleteOnExit()
                     val inputStream = context.contentResolver.openInputStream(attachment.uri)
+                    var fileSize = 0L
+                    
                     if (inputStream != null) {
                         FileOutputStream(tempFile).use { output ->
                             inputStream.copyTo(output)
+                            fileSize = tempFile.length()
                             inputStream.close()
                         }
+                        
                         val json = if (catboxUserhash.isNullOrEmpty() || configData.Name != "catbox.moe") {
                             newUpload(tempFile, configData, LOG, timeout = timeoutMillis)
                         } else {
                             newUpload(tempFile, configData, LOG, catboxUserhash, timeout = timeoutMillis)
                         }
+                        
                         val matcher = pattern.matcher(json)
                         if (matcher.find()) {
                             val fileUrl = matcher.group()
+                            val filename = extractFilename(fileUrl)
                             uploadedUrls.add(fileUrl)
+                            
+                            // Add to upload history
+                            addToUploadHistory(fileUrl, filename, fileSize)
+                            
                             if (albumMode) {
-                                val filename = extractFilename(fileUrl)
                                 if (filename.isNotEmpty()) {
                                     collectedFiles.add(filename)
                                 }
                             }
                         }
+                        
                         try {
                             tempFile.delete()
                         } catch (e: Exception) {
