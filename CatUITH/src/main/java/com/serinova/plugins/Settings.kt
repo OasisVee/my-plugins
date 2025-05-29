@@ -132,6 +132,60 @@ class PluginSettings(private val settings: SettingsAPI) : SettingsPage() {
             setPadding(p, p, p, p) 
         })
 
+        // Upload History Settings Section
+        mainLayout.addView(createSectionHeader("Upload History Settings"))
+        mainLayout.addView(createDescriptionText("Configure how many uploaded files to remember"))
+
+        // Max History Size Input
+        val maxHistoryInput = TextInput(ctx, "Max History Size").apply {
+            editText.setText(settings.getInt("maxHistorySize", 50).toString())
+            editText.setTextColor(colors.text)
+            editText.setHintTextColor(colors.subtext)
+        }
+        mainLayout.addView(maxHistoryInput)
+
+        // Save Max History Button
+        val maxHistoryButton = Button(ctx).apply {
+            text = "Save"
+            setTextColor(colors.base)
+            setBackgroundColor(colors.blue)
+            setOnClickListener {
+                try {
+                    val maxSize = maxHistoryInput.editText.text.toString().toInt()
+                    if (maxSize < 0) {
+                        Utils.showToast("History size cannot be negative")
+                    } else {
+                        settings.setInt("maxHistorySize", maxSize)
+                        Utils.showToast("Saved max history size")
+                    }
+                } catch (e: NumberFormatException) {
+                    Utils.showToast("Please enter a valid number")
+                }
+            }
+        }
+        mainLayout.addView(maxHistoryButton)
+
+        // Upload History Info
+        mainLayout.addView(createDescriptionText("Set to 0 to disable upload history. Use /cuith history to view recent uploads."))
+
+        // Clear History Button
+        val clearHistoryButton = Button(ctx).apply {
+            text = "Clear Upload History"
+            setTextColor(colors.base)
+            setBackgroundColor(colors.red)
+            setOnClickListener {
+                settings.setString("uploadHistory", "[]")
+                Utils.showToast("Upload history cleared")
+            }
+        }
+        mainLayout.addView(clearHistoryButton)
+
+        // Divider
+        mainLayout.addView(Divider(ctx).apply { 
+            setBackgroundColor(colors.surface0)
+            setPadding(p, p, p, p) 
+        })
+
         // Advanced Settings Section
         mainLayout.addView(createSectionHeader("Advanced Settings"))
 
@@ -252,6 +306,20 @@ class PluginSettings(private val settings: SettingsAPI) : SettingsPage() {
             setPadding(p, p, p, p)
         }
         mainLayout.addView(albumHelpText)
+
+        // Upload History Help Section
+        mainLayout.addView(createSectionHeader("Upload History Help"))
+        
+        val historyHelpText = TextView(ctx).apply {
+            text = "Upload History Commands:\n" +
+                   "• /cuith history - View recent upload history\n" +
+                   "• /cuith clearhistory - Clear upload history\n\n" +
+                   "Upload history tracks your recent file uploads and allows you\n" +
+                   "to easily re-share them without re-uploading."
+            setTextColor(colors.text)
+            setPadding(p, p, p, p)
+        }
+        mainLayout.addView(historyHelpText)
 
         // Links Section
         mainLayout.addView(createSectionHeader("Links"))

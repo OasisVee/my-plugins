@@ -14,3 +14,10 @@ data class Config
         var ResponseType: String?,
         var URL: String?
 )
+
+data class UploadHistoryItem(
+    val url: String,
+    val filename: String,
+    val fileSize: Long,
+    val timestamp: Long
+)

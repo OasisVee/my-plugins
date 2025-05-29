@@ -1,8 +1,12 @@
-version = "1.2.3"
+version = "1.3.0"
 description = "Upload images to catbox.moe directly from Discord. (bigger files can take upwards of minutes depending on your internet speed)"
 aliucord.author("scruz", 794527403580981248L)
 aliucord.changelog.set(
     """
+    # 1.3.0
+    * added upload history, use /cuith history to see your history from this update, files uploaded before this update won't be seen since it stores it locally
+    * added max history amount in settings and also added /cuith clearhistory and a clear history button in settings
+
     # 1.2.3
     * added finishalb to cuith as a subcommand
     [BUGS]
