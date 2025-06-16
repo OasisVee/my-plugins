@@ -5,10 +5,7 @@ rootProject.name = "my-plugins"
 
 // Plugins are included like this
 include("AnimeImageFetch")
-include(":CatUITH")
+include("CatUITH")
+include("PixelUITH")
 include("Sed")
 include("Skull")
-// Explicitly set the project directory for CatUITH
-project(":CatUITH").projectDir = File(rootDir, "CatUITH")
-
-
