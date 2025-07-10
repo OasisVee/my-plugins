@@ -1,8 +1,12 @@
-version = "1.3.0"
+version = "1.4.0"
 description = "Upload images to catbox.moe directly from Discord. (bigger files can take upwards of minutes depending on your internet speed)"
 aliucord.author("scruz", 794527403580981248L)
 aliucord.changelog.set(
     """
+    # 1.4.0 (By DeafThing)
+    * Added a setting to use Litterbox for file temporary file hosting
+    * Added a file retention setting that is for Litterbox only
+
     # 1.3.0
     * added upload history, use /cuith history to see your history from this update, files uploaded before this update won't be seen since it stores it locally
     * added max history amount in settings
