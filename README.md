@@ -14,7 +14,7 @@ Replacement for Nekoslife that uses the [waifu.pics](https://waifu.pics) API ins
 
 ## CatUITH
 
-Fork of UITH (originally by scrazzz) focused on Catbox integration. Still supports other hosting services.
+Fork of UITH (originally by scrazzz) focused on Catbox integration.
 
 ### Changes from original:
 - Default config set up for Catbox
@@ -29,8 +29,8 @@ Fork of UITH (originally by scrazzz) focused on Catbox integration. Still suppor
 - Upload history support:
   - `/cuith history` - shows history (does from locally so uploaded files from before this addition will not be shown)
   - `/cuith clearhistory` - clears history (can also be used by a button in settings)
-  - max history count in settings (Default: 50, setting to 0 disables history)
-
+- Max history count in settings (Default: 50, setting to 0 disables history)
+- Litterbox.catbox.moe support for temporary file storing and setting for file retention time for Litterbox
 ---
 
 ## Sed
