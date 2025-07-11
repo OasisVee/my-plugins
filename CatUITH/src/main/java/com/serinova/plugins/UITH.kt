@@ -177,6 +177,18 @@ class CatUITH : Plugin() {
         ResponseType = null,
         URL = null
     )
+    
+    private val DEFAULT_LITTERBOX_CONFIG = Config(
+        Name = "litterbox.catbox.moe",
+        DestinationType = "ImageUploader", 
+        RequestURL = "https://litterbox.catbox.moe/resources/internals/api.php",
+        FileFormName = "fileToUpload",
+        Headers = null,
+        Arguments = mapOf("reqtype" to "fileupload", "time" to "12h"),
+        ResponseType = "Text",
+        URL = null
+    )
+    
     private var albumMode = false
     private var pendingAlbumTitle = ""
     private var pendingAlbumDesc = ""
@@ -192,8 +204,7 @@ class CatUITH : Plugin() {
     }
     private val pattern = Pattern.compile(re.toString())
     private val albumPattern = Pattern.compile("https:\\/\\/catbox\\.moe\\/c\\/[\\w]{6}")
-
-    // Upload history functionality
+    private val litterboxPattern = Pattern.compile("https:\\/\\/litter\\.catbox\\.moe\\/[\\w.-]*")
     private fun getUploadHistory(): MutableList<UploadHistoryItem> {
         val historyJson = settings.getString("uploadHistory", "[]")
         return try {
@@ -216,19 +227,13 @@ class CatUITH : Plugin() {
 
     private fun addToUploadHistory(url: String, filename: String, fileSize: Long) {
         val maxHistorySize = settings.getInt("maxHistorySize", 50)
-        if (maxHistorySize <= 0) return // History disabled
+        if (maxHistorySize <= 0) return
         
         val history = getUploadHistory()
         val timestamp = System.currentTimeMillis()
         val newItem = UploadHistoryItem(url, filename, fileSize, timestamp)
-        
-        // Remove duplicate URLs if they exist
         history.removeAll { it.url == url }
-        
-        // Add new item at the beginning
         history.add(0, newItem)
-        
-        // Trim to max size
         while (history.size > maxHistorySize) {
             history.removeAt(history.size - 1)
         }
@@ -257,26 +262,32 @@ class CatUITH : Plugin() {
         return url.substringAfterLast("/", "")
     }
 
+    private fun getCurrentConfig(): Config {
+        val useLitterbox = settings.getBool("useLitterbox", false)
+        
+        return if (useLitterbox) {
+            val litterboxTime = settings.getString("litterboxTime", "12h")
+            val litterboxConfig = DEFAULT_LITTERBOX_CONFIG.copy()
+            litterboxConfig.Arguments = mapOf("reqtype" to "fileupload", "time" to litterboxTime)
+            litterboxConfig
+        } else {
+            val sxcuConfig = settings.getString("jsonConfig", GsonUtils.toJson(DEFAULT_CATBOX_CONFIG))
+            GsonUtils.fromJson(sxcuConfig, Config::class.java)
+        }
+    }
+
+    private fun getCurrentRegexPattern(): Pattern {
+        val useLitterbox = settings.getBool("useLitterbox", false)
+        
+        return if (useLitterbox) {
+            litterboxPattern
+        } else {
+            pattern
+        }
+    }
+
     override fun start(ctx: Context) {
         val args = listOf(
-            Utils.createCommandOption(
-                ApplicationCommandType.SUBCOMMAND,
-                "add",
-                "Add json config",
-                subCommandOptions = listOf(
-                    Utils.createCommandOption(
-                        ApplicationCommandType.STRING,
-                        "json",
-                        "Add json config (paste the contents)",
-                        required = true
-                    )
-                )
-            ),
-            Utils.createCommandOption(
-                ApplicationCommandType.SUBCOMMAND,
-                "current",
-                "View current UITH settings"
-            ),
             Utils.createCommandOption(
                 ApplicationCommandType.SUBCOMMAND,
                 "disable",
@@ -350,9 +361,16 @@ class CatUITH : Plugin() {
             }
 
             if (it.containsArg("current")) {
-                val configData = settings.getString("jsonConfig", 
-                    GsonUtils.toJson(DEFAULT_CATBOX_CONFIG)
-                )
+                val useLitterbox = settings.getBool("useLitterbox", false)
+                val serviceName = if (useLitterbox) "Litterbox" else "Catbox"
+                val litterboxTime = settings.getString("litterboxTime", "12h")
+                
+                val configData = if (useLitterbox) {
+                    GsonUtils.toJson(getCurrentConfig())
+                } else {
+                    settings.getString("jsonConfig", GsonUtils.toJson(DEFAULT_CATBOX_CONFIG))
+                }
+                
                 val configRegex = settings.getString("regex", null)
                 val catboxUserhash = settings.getString("catboxUserhash", "")
                 val userhashDisplay = if (catboxUserhash.isNullOrEmpty()) "Not set (anonymous uploads)" else "Set"
@@ -361,9 +379,16 @@ class CatUITH : Plugin() {
                 val settingsTimeout = settings.getString("timeout", "200")
                 val maxHistorySize = settings.getInt("maxHistorySize", 50)
                 val sb = StringBuilder()
+                
+                sb.append("**Service:** $serviceName\n")
+                if (useLitterbox) {
+                    sb.append("**Litterbox Time:** $litterboxTime\n")
+                }
                 sb.append("json config:```\n$configData\n```\n\n")
                 sb.append("regex:```\n$configRegex\n```\n\n")
-                sb.append("catbox userhash: `$userhashDisplay`\n")
+                if (!useLitterbox) {
+                    sb.append("catbox userhash: `$userhashDisplay`\n")
+                }
                 sb.append("uploadAllAttachments: `$settingsUploadAllAttachments`\n")
                 sb.append("pluginOff: `$settingsPluginOff`\n")
                 sb.append("timeout: `$settingsTimeout` seconds\n")
@@ -383,6 +408,16 @@ class CatUITH : Plugin() {
             }
 
             if (it.containsArg("album")) {
+                val useLitterbox = settings.getBool("useLitterbox", false)
+                if (useLitterbox) {
+                    return@registerCommand CommandResult(
+                        "❌ Album creation is not supported with Litterbox. " +
+                        "Please switch to Catbox in settings to use album features.",
+                        null,
+                        false
+                    )
+                }
+                
                 val catboxUserhash = settings.getString("catboxUserhash", "")
                 if (catboxUserhash.isNullOrEmpty()) {
                     return@registerCommand CommandResult(
@@ -425,6 +460,16 @@ class CatUITH : Plugin() {
             }
 
             if (it.containsArg("finishalb")) {
+                val useLitterbox = settings.getBool("useLitterbox", false)
+                if (useLitterbox) {
+                    return@registerCommand CommandResult(
+                        "❌ Album creation is not supported with Litterbox. " +
+                        "Please switch to Catbox in settings to use album features.",
+                        null,
+                        false
+                    )
+                }
+                
                 if (!albumMode || collectedFiles.isEmpty()) {
                     return@registerCommand CommandResult(
                         "❌ No active album with files to finalize. Start album creation with `/cuith album`.", 
@@ -520,10 +565,10 @@ class CatUITH : Plugin() {
             val attachments = (it.args[3] as List<Attachment<*>>).toMutableList()
             if (settings.getBool("pluginOff", false)) { return@before }
             if (attachments.isEmpty()) { return@before }
-            val sxcuConfig = settings.getString("jsonConfig", 
-                GsonUtils.toJson(DEFAULT_CATBOX_CONFIG)
-            )
-            val configData = GsonUtils.fromJson(sxcuConfig, Config::class.java)
+            
+            val useLitterbox = settings.getBool("useLitterbox", false)
+            val configData = getCurrentConfig()
+            val currentPattern = getCurrentRegexPattern()
             val catboxUserhash = settings.getString("catboxUserhash", "")
             val timeoutSeconds = settings.getString("timeout", "200").toLong()
             val timeoutMillis = timeoutSeconds * 1000
@@ -543,14 +588,25 @@ class CatUITH : Plugin() {
                 }
             }
             
+            val serviceName = if (useLitterbox) "Litterbox" else "Catbox"
+            val serviceUrl = if (useLitterbox) "litterbox.catbox.moe" else "catbox.moe"
+            
             if (albumMode) {
-                Utils.showToast("Uploading files to catbox.moe for album...", false)
+                if (useLitterbox) {
+                    Utils.showToast("Album mode is not supported with Litterbox. Switching to regular upload.", false)
+                    albumMode = false
+                    pendingAlbumTitle = ""
+                    pendingAlbumDesc = ""
+                    collectedFiles.clear()
+                } else {
+                    Utils.showToast("Uploading files to catbox.moe for album...", false)
+                }
             } else if (largestFileSizeMB > 25) {
-                Utils.showToast("Uploading large file (${String.format("%.1f", largestFileSizeMB)} MB) to catbox.moe. This may take several minutes, please wait...", false)
+                Utils.showToast("Uploading large file (${String.format("%.1f", largestFileSizeMB)} MB) to $serviceUrl. This may take several minutes, please wait...", false)
             } else if (largestFileSizeMB > 10) {
-                Utils.showToast("Uploading file (${String.format("%.1f", largestFileSizeMB)} MB) to catbox.moe. This might take a while, please wait...", false)
+                Utils.showToast("Uploading file (${String.format("%.1f", largestFileSizeMB)} MB) to $serviceUrl. This might take a while, please wait...", false)
             } else {
-                Utils.showToast("Uploading to catbox.moe...", false)
+                Utils.showToast("Uploading to $serviceUrl...", false)
             }
             
             val uploadedUrls = mutableListOf<String>()
@@ -581,22 +637,22 @@ class CatUITH : Plugin() {
                             inputStream.close()
                         }
                         
-                        val json = if (catboxUserhash.isNullOrEmpty() || configData.Name != "catbox.moe") {
+                        val json = if (useLitterbox) {
+                            newUpload(tempFile, configData, LOG, timeout = timeoutMillis)
+                        } else if (catboxUserhash.isNullOrEmpty() || configData.Name != "catbox.moe") {
                             newUpload(tempFile, configData, LOG, timeout = timeoutMillis)
                         } else {
                             newUpload(tempFile, configData, LOG, catboxUserhash, timeout = timeoutMillis)
                         }
                         
-                        val matcher = pattern.matcher(json)
+                        val matcher = currentPattern.matcher(json)
                         if (matcher.find()) {
                             val fileUrl = matcher.group()
                             val filename = extractFilename(fileUrl)
                             uploadedUrls.add(fileUrl)
-                            
-                            // Add to upload history
                             addToUploadHistory(fileUrl, filename, fileSize)
                             
-                            if (albumMode) {
+                            if (albumMode && !useLitterbox) {
                                 if (filename.isNotEmpty()) {
                                     collectedFiles.add(filename)
                                 }
@@ -617,7 +673,7 @@ class CatUITH : Plugin() {
             }
 
             if (uploadedUrls.isNotEmpty()) {
-                if (albumMode) {
+                if (albumMode && !useLitterbox) {
                     content.set("")
                     it.result = null
                     it.args[3] = emptyList<Attachment<*>>()
@@ -625,8 +681,22 @@ class CatUITH : Plugin() {
                     Utils.showToast("${uploadedUrls.size} file(s) uploaded and ready for album **$pendingAlbumTitle**. Use /cuith finishalb when done to create the album.", false)
                     return@before
                 } else {
+                    val serviceMessage = if (useLitterbox) {
+                        val timeOption = settings.getString("litterboxTime", "12h")
+                        val timeText = when (timeOption) {
+                            "1h" -> "1 hour"
+                            "12h" -> "12 hours"
+                            "24h" -> "24 hours"
+                            "72h" -> "72 hours"
+                            else -> timeOption
+                        }
+                        " (expires in $timeText)"
+                    } else {
+                        ""
+                    }
+                    
                     content.set("$plainText\n${uploadedUrls.joinToString("\n")}")
-                    Utils.showToast("Upload completed successfully!", false)
+                    Utils.showToast("Upload to $serviceName completed successfully!$serviceMessage", false)
         
                     it.args[2] = content
                     it.args[3] = emptyList<Attachment<*>>()
